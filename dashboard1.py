@@ -110,7 +110,7 @@ st.image("https://media.licdn.com/dms/image/v2/C4E0BAQHGRK4sbvBk8w/company-logo_
          width=200)
 st.title("Global Fixed Income Dashboard - Franco Olivares")
 
-tab1, tab2, tab3 = st.tabs(["Treasury Yields", "US Corporate Bonds", "US Labor Market"])
+tab1, tab2, tab3, tab4 = st.tabs(["Treasury Yields", "US Corporate Bonds", "US Labor Market", "Equity"])
 
 # --------------------------------------
 # TAB 1: CURVAS DEL TESORO
@@ -198,30 +198,29 @@ with tab3:
     st.subheader("Análisis del Mercado Laboral en USA")
 
     codigos_laborales = {
-    "Tasa de desempleo": "UNRATE",
-    "Nonfarm Payrolls": "PAYEMS",
-    "Ofertas laborales (JOLTS)": "JTSJOL",
-    "Renuncias (Quit Rate)": "JTSQUR",
-    "Participación laboral": "CIVPART",
-    "Initial Claims (ICSA)": "ICSA"
+        "Tasa de desempleo": "UNRATE",
+        "Nonfarm Payrolls": "PAYEMS",
+        "Ofertas laborales (JOLTS)": "JTSJOL",
+        "Renuncias (Quit Rate)": "JTSQUR",
+        "Participación laboral": "CIVPART",
+        "Initial Claims (ICSA)": "ICSA"
     }
 
-
     fred = Fred(api_key='762e2ee1c8fab5d038ce317929d47226')
-    datos_laborales = {}
 
-    for nombre, codigo in codigos_laborales.items():
-        serie = fred.get_series(codigo)
-        serie.name = nombre
-        datos_laborales[nombre] = serie.dropna()
+    @st.cache_data
+    def obtener_serie(codigo):
+        return fred.get_series(codigo).dropna()
 
-
+    datos_laborales = {
+        nombre: obtener_serie(codigo)
+        for nombre, codigo in codigos_laborales.items()
+    }
 
     z_scores = {}
     resumen_tabla = []
 
     for nombre, serie in datos_laborales.items():
-        serie = serie.dropna()
         z = (serie - serie.mean()) / serie.std()
         z_scores[nombre] = z
         actual = serie.iloc[-1]
@@ -238,8 +237,6 @@ with tab3:
 
     df_resumen = pd.DataFrame(resumen_tabla).sort_values("Z-Score actual", ascending=False)
 
-    # Tabla resumida
-    # Formato con separadores de miles y semáforo de alerta por Z-Score
     def formato_numero(x):
         if isinstance(x, (int, float)):
             return f"{x:,.2f}"
@@ -258,85 +255,81 @@ with tab3:
     for col in columnas_format:
         df_resumen[col] = df_resumen[col].apply(formato_numero)
 
-    # Ordenamos para que el semáforo aparezca al principio
     df_resumen = df_resumen[["Alerta", "Indicador"] + columnas_format]
 
     st.markdown("### Resumen estadístico con alerta visual")
     st.dataframe(df_resumen, use_container_width=True, height=350)
 
-
-    # Gráfico de barras horizontales tipo Z-Score
     fig_z = px.bar(df_resumen, x="Z-Score actual", y="Indicador", orientation='h',
                    color="Z-Score actual", color_continuous_scale="RdBu_r",
                    title=" Desviación Estándar de Indicadores respecto a su Media Histórica")
     fig_z.update_layout(height=400, xaxis_title="Z-Score", yaxis_title="", template="plotly_white")
     st.plotly_chart(fig_z, use_container_width=True)
 
-
-    # Preparamos los Z-Scores para el heatmap (excluyendo ICSA)
     df_z_all = pd.DataFrame(z_scores)
     df_z_all.index = pd.to_datetime(df_z_all.index)
     df_z_all = df_z_all.resample("M").mean().interpolate()
     df_z_all = df_z_all[df_z_all.index >= "2018"]
 
-# Excluir ICSA del heatmap si está presente
-    if "Initial Claims (ICSA)" in df_z_all.columns: df_z_heatmap = df_z_all.drop(columns=["Initial Claims (ICSA)"])
-    else: df_z_heatmap = df_z_all.copy()
+    if "Initial Claims (ICSA)" in df_z_all.columns:
+        df_z_heatmap = df_z_all.drop(columns=["Initial Claims (ICSA)"])
+    else:
+        df_z_heatmap = df_z_all.copy()
+
     fig_heat = px.imshow(df_z_heatmap.T,
-                     aspect="auto",
-                     color_continuous_scale="RdBu_r",
-                     labels=dict(x="Fecha", y="Indicador", color="Z-Score"),
-                     title="Mapa de Calor: ¿Qué tan lejos están los indicadores de su media?")
-    fig_heat.update_layout(height=500)
+                         aspect="auto",
+                         color_continuous_scale="RdBu_r",
+                         labels=dict(x="Fecha", y="Indicador", color="Z-Score"),
+                         title="Mapa de Calor: ¿Qué tan lejos están los indicadores de su media?")
+    fig_heat.update_layout(height=500, xaxis_nticks=20)
     st.plotly_chart(fig_heat, use_container_width=True)
 
-   # Nuevo gráfico solo para ICSA
     st.markdown("### Evolución de Solicitudes por Desempleo en USA (ICSA)")
 
-# Serie original completa
     icsa = datos_laborales["Initial Claims (ICSA)"]
-
-# Calcular métricas
     z_icsa = (icsa - icsa.mean()) / icsa.std()
     pct_icsa = icsa.pct_change() * 100
 
-# Selector de métrica
     opcion_icsa = st.radio(
-    " Métrica a visualizar de ICSA:",
-    ["Variación porcentual", "Z-Score", "Nivel absoluto"],
-    horizontal=True)
+        " Métrica a visualizar de ICSA:",
+        ["Variación porcentual", "Z-Score", "Nivel absoluto"],
+        horizontal=True
+    )
 
-# Escoger la serie base
-if opcion_icsa == "Variación porcentual": 
-    serie_base = pct_icsa
-    titulo = "Variación Porcentual de Solicitudes Iniciales por Desempleo (ICSA)"
-    y_label = "% Variación"
-elif opcion_icsa == "Z-Score": 
-    serie_base = z_icsa
-    titulo = "Z-Score de Solicitudes Iniciales por Desempleo (ICSA)"
-    y_label = "Z-Score"
-else:
-    serie_base = icsa
-    titulo = "Nivel Absoluto de Solicitudes Iniciales por Desempleo (ICSA)"
-    y_label = "Solicitudes"
+    if opcion_icsa == "Variación porcentual":
+        serie_base = pct_icsa
+        titulo = "Variación Porcentual de Solicitudes Iniciales por Desempleo (ICSA)"
+        y_label = "% Variación"
+    elif opcion_icsa == "Z-Score":
+        serie_base = z_icsa
+        titulo = "Z-Score de Solicitudes Iniciales por Desempleo (ICSA)"
+        y_label = "Z-Score"
+    else:
+        serie_base = icsa
+        titulo = "Nivel Absoluto de Solicitudes Iniciales por Desempleo (ICSA)"
+        y_label = "Solicitudes"
 
-# Rango de fechas disponible
-fecha_min = icsa.index.min().to_pydatetime()
-fecha_max = icsa.index.max().to_pydatetime()
+    # Mostrar resumen al lado del gráfico
+    st.markdown(f"**Último valor:** {formato_numero(icsa.iloc[-1])} | "
+                f"**Promedio histórico:** {formato_numero(icsa.mean())} | "
+                f"**Desviación estándar:** {formato_numero(icsa.std())}")
 
-# Valor por defecto: mostrar desde 2018
-fecha_defecto_inicio = pd.to_datetime("2018-01-01").to_pydatetime()
+    fecha_min = icsa.index.min().to_pydatetime()
+    fecha_max = icsa.index.max().to_pydatetime()
+    fecha_defecto_inicio = pd.to_datetime("2018-01-01").to_pydatetime()
 
-# Slider de fechas
-fecha_slider = st.slider("Rango de fechas para visualizar:", min_value=fecha_min, max_value=fecha_max, value=(fecha_defecto_inicio, fecha_max), format="YYYY-MM")
+    fecha_slider = st.slider(
+        "Rango de fechas para visualizar:",
+        min_value=fecha_min, max_value=fecha_max,
+        value=(fecha_defecto_inicio, fecha_max),
+        format="YYYY-MM"
+    )
 
-# Filtrar serie según selección
-serie_filtrada = serie_base[(serie_base.index >= fecha_slider[0]) & (serie_base.index <= fecha_slider[1])]
+    serie_filtrada = serie_base[(serie_base.index >= fecha_slider[0]) & (serie_base.index <= fecha_slider[1])]
 
-# Crear gráfico
-fig_icsa = px.line(serie_filtrada, title=titulo, labels={"value": y_label, "index": "Fecha"})
-    # Sombrear períodos históricos relevantes
-eventos = [
+    fig_icsa = px.line(serie_filtrada, title=titulo, labels={"value": y_label, "index": "Fecha"})
+
+    eventos = [
         {"x0": "1973-10-01", "x1": "1974-03-01", "color": "LightGray", "texto": "Crisis OPEP"},
         {"x0": "1980-01-01", "x1": "1982-08-01", "color": "Thistle", "texto": "Volcker Shock"},
         {"x0": "2000-03-01", "x1": "2002-10-01", "color": "LightSalmon", "texto": "Crisis punto-com"},
@@ -346,13 +339,109 @@ eventos = [
         {"x0": "2025-01-20", "x1": "2025-06-01", "color": "LightBlue", "texto": "Trump's Tariffs II"}
     ]
 
-for evento in eventos:
-        fig_icsa.add_vrect(x0=evento["x0"], x1=evento["x1"],
-                           fillcolor=evento["color"], opacity=0.15, layer="below", line_width=0,
-                           annotation_text=evento["texto"], annotation_position="top left")
+    for evento in eventos:
+        fig_icsa.add_vrect(
+            x0=evento["x0"], x1=evento["x1"],
+            fillcolor=evento["color"], opacity=0.15, layer="below", line_width=0,
+            annotation_text=evento["texto"], annotation_position="top left"
+        )
 
-fig_icsa.update_layout(template="plotly_white", height=400)
-st.plotly_chart(fig_icsa, use_container_width=True)
+    fig_icsa.update_layout(template="plotly_white", height=400)
+    st.plotly_chart(fig_icsa, use_container_width=True)
+
+
+# --------------------------------------
+# TAB 4: EQUITY 
+# --------------------------------------
+with tab4:
+    st.subheader("Análisis Comparativo de Activos de Equity y Bonos")
+
+    import yfinance as yf
+
+    tickers = {
+        "VIX": "^VIX",
+        "S&P 500": "^GSPC",
+        "ETF TLT (Bonos Largo Plazo)": "TLT",
+        "ETF IEF (Bonos Mediano Plazo)": "IEF"
+    }
+
+    fecha_inicio = "2018-01-01"
+
+    @st.cache_data
+    def descargar_datos(tickers_dict, start):
+        series = []
+        nombres_validos = []
+
+        for nombre, ticker in tickers_dict.items():
+            try:
+                datos = yf.download(ticker, start=start)["Close"]
+                if not datos.empty:
+                    datos.name = nombre
+                    series.append(datos)
+                    nombres_validos.append(nombre)
+                else:
+                    st.warning(f"⚠️ No se encontraron datos para {nombre} ({ticker})")
+            except Exception as e:
+                st.error(f"❌ Error al descargar {nombre} ({ticker}): {e}")
+
+        if not series:
+            return pd.DataFrame()
+
+        # Unir todos los datos por fechas comunes
+        df = pd.concat(series, axis=1, join="inner")
+        df.columns = nombres_validos  # asegura nombres consistentes
+        return df
+
+    precios = descargar_datos(tickers, fecha_inicio)
+
+    if precios.empty:
+        st.error("No se pudieron descargar datos válidos. Verifica tu conexión o los tickers.")
+        st.stop()
+
+    # Variación porcentual y acumulada
+    variaciones = precios.pct_change().fillna(0)
+    variaciones_acumuladas = (1 + variaciones).cumprod() - 1
+
+    # Leyenda con últimos valores y desviaciones estándar
+    leyenda_info = []
+    for nombre in precios.columns:
+        ultimo = precios[nombre].iloc[-1]
+        std = precios[nombre].std()
+        leyenda_info.append(f"{nombre}: {ultimo:,.2f} | σ: {std:,.2f}")
+
+    # Gráfico
+    fig_equity = px.line(
+        variaciones_acumuladas,
+        labels={"value": "Variación Acumulada", "index": "Fecha", "variable": "Activo"},
+        title="Comparativo: VIX, S&P 500, TLT e IEF (Variación Porcentual Acumulada)"
+    )
+
+    fig_equity.update_traces(mode="lines")
+    fig_equity.update_layout(
+    height=500,
+    template="plotly_white",
+    legend_title_text="",
+    margin=dict(l=30, r=30, t=60, b=40),
+    annotations=[
+        dict(
+            xref="paper", yref="paper",
+            x=0.01, y=0.99,  # ESQUINA SUPERIOR IZQUIERDA
+            xanchor="left", yanchor="top",
+            align="left",
+            text="<br>".join(leyenda_info),
+            showarrow=False,
+            font=dict(size=12),
+            bordercolor="black",
+            borderwidth=1,
+            bgcolor="white",
+            opacity=0.9
+        )
+    ]
+)
+
+
+    st.plotly_chart(fig_equity, use_container_width=True)
+
 
 
 
